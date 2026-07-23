@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import urllib.request
 import urllib.error
+import ssl
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urljoin
@@ -18,6 +19,14 @@ from urllib.parse import urljoin
 SERVER_URL = "https://x7kq9mp2vl4nr8st3wf6yh1jb5cz0au-1.onrender.com"
 INSTALL_DIR_NAME = "RORSH"
 APP_NAME = "RORSH-ADMIN"
+
+# ─── SSL Context (Bypass verification for cloud VMs without root certs) ─────
+
+# Create an SSL context that doesn't verify certificates
+# This is needed on fresh/cloud Windows VMs that lack updated root CA stores
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 
@@ -33,7 +42,6 @@ class Logger:
         d_path = Path("D:/RORSH-Room/Installer")
         try:
             d_path.mkdir(parents=True, exist_ok=True)
-            # Test write access
             test_file = d_path / ".write_test"
             test_file.write_text("test")
             test_file.unlink()
@@ -57,7 +65,7 @@ class Logger:
             with open(self.log_file, 'a', encoding='utf-8') as f:
                 f.write(line + '\n')
         except Exception:
-            pass  # Silent fail on logging error
+            pass
 
 logger = Logger()
 
@@ -97,13 +105,15 @@ def http_post_json(url, data):
         headers={'Content-Type': 'application/json'},
         method='POST'
     )
-    with urllib.request.urlopen(req, timeout=30) as response:
+    # Use custom SSL context to bypass cert verification
+    with urllib.request.urlopen(req, timeout=30, context=ssl_context) as response:
         return json.loads(response.read().decode('utf-8'))
 
 def http_download(url, dest_path):
     """Download file from URL to destination path."""
     req = urllib.request.Request(url, headers={'User-Agent': 'RORSH-Installer/1.0'})
-    with urllib.request.urlopen(req, timeout=60) as response:
+    # Use custom SSL context to bypass cert verification
+    with urllib.request.urlopen(req, timeout=60, context=ssl_context) as response:
         with open(dest_path, 'wb') as f:
             f.write(response.read())
 
@@ -113,7 +123,6 @@ def kill_processes_in_directory(directory):
     logger.log(f"Scanning processes in: {norm_dir}")
 
     try:
-        # Use tasklist + wmic for reliable process enumeration
         result = subprocess.run(
             ['wmic', 'process', 'get', 'ProcessId,ExecutablePath', '/format:csv'],
             capture_output=True, text=True, timeout=30
@@ -138,7 +147,7 @@ def kill_processes_in_directory(directory):
                         logger.log(f"Warning: Could not kill PID {pid_str}: {e}")
 
         logger.log(f"Killed {killed} process(es)")
-        time.sleep(2)  # Let handles release
+        time.sleep(2)
     except Exception as e:
         logger.log(f"Warning: Process scan failed: {e}")
 
@@ -160,7 +169,7 @@ def launch_silent(exe_path):
     logger.log(f"Launching: {exe_path}")
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = 0  # SW_HIDE
+    startupinfo.wShowWindow = 0
     subprocess.Popen(
         [exe_path],
         startupinfo=startupinfo,
@@ -184,7 +193,6 @@ def main():
             logger.log("Existing installation found — entering Reinstall flow.")
             kill_processes_in_directory(install_dir)
 
-            # Retry delete with backoff
             retries = 5
             while retries > 0:
                 try:
@@ -295,7 +303,6 @@ def main():
 # ─── Entry Point ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Hide console window immediately (if running as console app)
     if sys.platform == "win32":
         try:
             ctypes.windll.user32.ShowWindow(ctypes.windll.kernel32.GetConsoleWindow(), 0)
